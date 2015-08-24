@@ -1,0 +1,104 @@
+#! /usr/bin/env Rscript
+## xml wurkunit table - generate a table from an xml file of WUs (with start dumps, ancillaries, perturbation, etc)
+## Author : Benoit Guillod
+## Syntax :
+## ./xml2table -i=input_file.xml -o=output_file.dat
+## n.b.: the output file argument is optional. If not given, the input_file will be taken after changing the extension to '.dat'
+
+## load packages
+suppressPackageStartupMessages(library("optparse"))
+#suppressPackageStartupMessages(library("stats"))
+
+## List of options
+option_list <- list( 
+    make_option(c("-i", "--input"), type="character", action="store", default=NULL,
+                help="XML file used as input",
+                metavar="example.xml"),
+    make_option(c("-o", "--output"), type="character", action="store", 
+                help="Output file for work unit table [optional]",
+                metavar="example.dat"))
+
+## get command line options, if help option encountered print help and exit,
+## otherwise if options not found on command line then set defaults,
+opt <- parse_args(OptionParser(option_list=option_list))
+## do required arguments exists?
+required.args <- c("input")
+missing.args <- is.na(match(required.args, names(opt))) | sapply(opt[required.args], is.null)
+if (any(missing.args)) {
+    print(required.args[missing.args])
+    stop(paste("** Required argument missing:", paste(required.args[missing.args], collapse=" & ")))
+}
+## prepare function args
+func.args <- list(file=opt$input, file.out=opt$output)
+func.args <- func.args[!sapply(func.args, is.null)]
+
+suppressPackageStartupMessages(library("XML"))
+
+xml2table <- function(file, file.out = sub("xml$", "dat", file)) {
+
+    if (FALSE) {
+
+        file <- "/ouce-home/staff/cenv0433/bin/xml2table/test.xml"
+        file.out = sub("xml$", "dat", file)
+
+    }
+    
+    require(XML)
+
+    tempfile <- strsplit(file, "/")[[1]]
+    ntemp <- length(tempfile)
+    path.in <- paste(tempfile[-ntemp], collapse="/")
+    path.in <- ifelse(path.in=="", "", paste0(path.in, "/"))
+    tempfile <- paste0(path.in, ".temp_", tempfile[ntemp])
+        
+    if (!file.exists(tempfile)) {
+        ## copy file
+        file.copy(from=file, to=tempfile)
+        ## remove white spaces and find line to remove
+        temp <- readLines(tempfile, warn=FALSE)
+        temp <- gsub(" ", "", temp, fixed=TRUE)
+        temp <- gsub("\t", "", temp, fixed=TRUE)
+        ## which lines should be removed?
+        irem <- list()
+        ## last lines
+        irem[[1]] <- which(temp=="</experiment>")
+        irem[[1]] <- c(irem[[1]][length(irem[[1]])]+1, length(temp))
+        ## first lines
+        irem[[2]] <- c(1, which(temp=="<experiment>")[1]-1)
+        ## remove all these lines
+        for (i in 1:length(irem)) system(paste0("sed -i '", irem[[i]][1], ",", irem[[i]][2], "d' ", tempfile))
+        ## now add the xml labels
+        str1 <- paste0("sed -i '1s/^/<?xml version=\"1.0\" ?>\\n<WorkGen>\\n /' ", tempfile)
+        str2 <- paste("sed -i '$s/$/\\n<\\/WorkGen>/'", tempfile)
+        system(str1)
+        system(str2)
+
+        ## load XML
+        data <- xmlParse(tempfile)
+        xml.data.temp <- xmlToList(data)
+        xml.data <- unlist(xml.data.temp)
+        xml.data <- gsub("\n", "", xml.data)
+        xml.data <- gsub("\t", "", xml.data)
+        xml.data <- gsub(" ", "", xml.data)
+        xml.data <- relist(xml.data, xml.data.temp)
+        ## loop on experiments
+        exp.data <- xml.data[names(xml.data) == "experiment"]
+        test <- data.frame(matrix(unlist(exp.data), nrow=length(exp.data), byrow=T),stringsAsFactors=FALSE)
+        names(test) <- names(exp.data[[1]][[1]])
+        iumid <- which(names(test) == "exptid")
+        test <- test[, c(iumid, (1:ncol(test))[-iumid])]
+
+        write.table(test, file=file.out, quote=FALSE, row.names=FALSE)
+        print(paste("** File created:", file.out))
+        print("** Available information in the XML:")
+        print(names(test))
+        file.remove(tempfile)
+        invisible(TRUE)
+    } else {
+        stop(paste("** ERROR ** temporary file", tempfile, "already exists - check and remove before running the script *****"))
+    }
+}
+
+
+## now call the function
+do.call(xml2table, args=func.args)
