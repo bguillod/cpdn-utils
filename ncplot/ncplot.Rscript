@@ -14,6 +14,7 @@ suppressPackageStartupMessages(library("fields"))
 suppressPackageStartupMessages(library("maps"))
 suppressPackageStartupMessages(library("maptools"))
 suppressPackageStartupMessages(library("plotmap"))
+suppressPackageStartupMessages(library("PCICt"))
 
 
 ## library("ncdf4")
@@ -31,6 +32,9 @@ option_list <- list(
     make_option(c("-v", "--variable"), type="character", action="store", default=NULL,
                 help="Name of the variable to plot",
                 metavar="field16"),
+    make_option(c("-p", "--plottype"), type="character", action="store", default=NULL,
+                help="Name of the plot type: 'image' or 'spacetime'",
+                metavar="image"),
     make_option(c("-b", "--borders"), type="logical", action="store_true", default=FALSE,
                 help="Add country borders to map?"),
     make_option(c("-o", "--output"), type="character", action="store", 
@@ -48,7 +52,7 @@ if (any(missing.args)) {
     stop(paste("** Required argument missing:", paste(required.args[missing.args], collapse=" & ")))
 }
 ## prepare function args
-func.args <- list(file=opt$input, var=opt$variable, with.borders=opt$borders, file.out=opt$output)
+func.args <- list(file=opt$input, var=opt$variable, with.borders=opt$borders, file.out=opt$output, plottype=opt$plottype)
 func.args <- func.args[!sapply(func.args, is.null)]
 
 
@@ -78,17 +82,28 @@ ncplot <- function(file, variable, with.borders, file.out, plottype="spacetime")
     nc <- nc_open(file)
     var <- ncvar_get(nc, variable)
     dims <- nc.get.dim.axes(nc, variable)
-    ncatt_get(nc, variable, "long_name")$value
+    varname <- ncatt_get(nc, variable, "long_name")$value
 
     ## get time dimensions
-    t.orig <- strsplit(ncatt_get(nc, names(dims)[dims == "T"], "units")$value, " since ")[[1]]
-    T <- ncvar_get(nc, "time")*nc.get.time.multiplier(t.orig[1])
-    time <- as.POSIXct(T, origin=strptime(t.orig[2], "%Y-%m-%d"))
+    t.orig <- strsplit(ncatt_get(nc, names(dims)[which(dims == "T")], "units")$value, " since ")[[1]]
+    T <- ncvar_get(nc, names(dims)[which(dims == "T")])*nc.get.time.multiplier(t.orig[1])
+    nccal <- ncatt_get(nc, names(dims)[which(dims == "T")], "calendar")
+    if (nccal$hasatt) {
+        if (nccal$value == "360_day") {
+            time <- as.PCICt(T, origin=strptime(t.orig[2], "%Y-%m-%d"), cal=nccal$value)
+            time <- strptime(format(time, "%Y-%m-%d"), format="%Y-%m-%d")
+        } else {
+            time <- as.POSIXct(T, origin=strptime(t.orig[2], "%Y-%m-%d"))
+        }
+    } else {
+        warning("** undefined calendar - assuming 'standard' *****")
+    }
+    ## time2 <- nc.get.time.series(nc, time.dim.name=names(dims)[which(dims == "T")])
     ## get spatial coordinates
-    X <- ncvar_get(nc, names(dims)[dims == "X"])
-    Y <- ncvar_get(nc, names(dims)[dims == "Y"])
-    Xname <- ncatt_get(nc, names(dims)[dims == "X"], "standard_name")$value
-    Yname <- ncatt_get(nc, names(dims)[dims == "Y"], "standard_name")$value
+    X <- ncvar_get(nc, names(dims)[which(dims == "X")])
+    Y <- ncvar_get(nc, names(dims)[which(dims == "Y")])
+    Xname <- ncatt_get(nc, names(dims)[which(dims == "X")], "standard_name")$value
+    Yname <- ncatt_get(nc, names(dims)[which(dims == "Y")], "standard_name")$value
     grid.mapping <- ncatt_get(nc, variable, "grid_mapping")
     if (grid.mapping$hasatt) {
         grid.type <- ncatt_get(nc, grid.mapping$value, "grid_mapping_name")
@@ -135,7 +150,7 @@ ncplot <- function(file, variable, with.borders, file.out, plottype="spacetime")
                 if (!all(dim(lon) == dim(arr)[1:2])) stop("** ERROR ** dimensions of lon and arr differ *****")
             } else {
                 dims.assumed <- c(length(lon), length(lat), length(time))
-                if (!all(dim(arr)[1:2] == dims.assumed)) stop("** ERROR ** dimensions assumed do not match *****")
+                if (!all(dim(arr)[1:3] == dims.assumed)) stop("** ERROR ** dimensions assumed do not match *****")
                 lon.orig <- lon
                 lat.orig <- lat
                 lon <- rep(lon.orig, times=length(lat.orig))
@@ -158,12 +173,19 @@ ncplot <- function(file, variable, with.borders, file.out, plottype="spacetime")
             Z.st <- a2st(var, lon, lat, time)
         } else {
             Z.st <- a2st(var-273.15, X, Y, time)
+            lon <- X
         }
 
         if (with.borders) {
-            test2 <- map2SpatialLines(map('world', plot=F))
-            proj4string(test2) <- "+proj=longlat +datum=WGS84"
-            polys <- list("sp.polygons", test2, col=1)
+            if (all(findInterval(lon, c(-180.00000001,180.00000001)) == 1)) {
+                map.borders <- map2SpatialLines(map('world', plot=F))
+            } else if (all(findInterval(lon, c(-0.0000001,360.00000001)) == 1)) {
+                map.borders <- map2SpatialLines(map('world2', plot=F))
+            } else {
+                warning("** unexpected longitude value, not borders can be drawn **")
+            }
+            proj4string(map.borders) <- "+proj=longlat +datum=WGS84"
+            polys <- list("sp.polygons", map.borders, col=1)
             x11()
             stplot(Z.st,col.regions=tim.colors(),
                    sp.layout=polys, main=varname)
@@ -179,13 +201,13 @@ ncplot <- function(file, variable, with.borders, file.out, plottype="spacetime")
             ## countries.m = map('world', plot=FALSE, fill=TRUE)
             ## IDs <- sapply(strsplit(countries.m$names, ":"), function(x) x[1])
             ## countries <- map2SpatialPolygons(countries.m, IDs=IDs)
-            data(world.nations)
-            mapcors <- matrix(c(world.nations$border$lon,
-                                world.nations$border$lat), ncol=2)
                                         #       which.neg <- which(mapcors[,1]<0)
                                         #        mapcors[which.neg,1] <- mapcors[which.neg,1]+360
                                         #        mapcors[mapcors[,1]<0,1] <- mapcors[mapcors[,1]<0,1]+360
             if (grid.type == "rotpol") {
+                data(world.nations)
+                mapcors <- matrix(c(world.nations$border$lon,
+                                    world.nations$border$lat), ncol=2)
                 ## first find the range in lonlat coords
                 grid.lonlat <- expand.grid(list(rlon=X,rlat=Y))
                 grid.lonlat <- rotpol2lonlat(grid.lonlat$rlon, grid.lonlat$rlat, plon=plon, plat=plat)
@@ -208,8 +230,17 @@ ncplot <- function(file, variable, with.borders, file.out, plottype="spacetime")
                 mapcors.neg <- which(mapcors[,1]<0)
                 mapcors[mapcors.neg, 1] <- mapcors[mapcors.neg, 1]+360
             } else if (grid.type != "lonlat") {
-                mapcors <- mapproject(list(x=world.nations$border[,"lon"],
-                                           y=world.nations$border[,"lat"]))
+                if (all(findInterval(lon, c(-180.00000001,180.00000001)) == 1)) {
+                    map.borders <- map('world', plot=F)
+                } else if (all(findInterval(lon, c(-0.0000001,360.00000001)) == 1)) {
+                    map.borders <- map('world2', plot=F)
+                } else {
+                    warning("** unexpected longitude value, not borders can be drawn **")
+                }
+                mapcors <- map.borders
+                ## mapcors <- mapproject(list(x=world.nations$border[,"lon"],
+                ##                            y=world.nations$border[,"lat"]))
+            } else {
                 stop("** ERROR ** unexpected value for grid.type *****")
             }
 
@@ -245,24 +276,23 @@ ncplot <- function(file, variable, with.borders, file.out, plottype="spacetime")
                        mar <- c(0.1,0.1,0.1,3)
                       },
                    {
-                       mfrows <- rep(ceiling(sqrt(length(time))))
+                       mfrows <- rep(ceiling(sqrt(length(time))), 2)
                        height <- width <- 7
                        mar <- c(0.1,0.1,0.1,3)
                       })
             breaks <- pretty(var, n=10)
             x11(width=width, height=height)
             par(mar=c(0.1,0.1,0.1,2))
-            plt.list <- define.plt(mfrows[1], mfrows[2])
+            plt.list <- define.plt(mfrows[1], mfrows[2])        
             for (i in 1:length(time)) {
                 smallplot <- if (i==length(time)) c(0.85,0.88,0.1,0.8) else rep(NA,4)
-                my.map.plot(X[Xorder],Y[Yorder],z=var[Xorder,Yorder,i], breaks = breaks, col=my.tim.colors, smallplot=smallplot, main=time[i], bigplot=plt.list[[i]], add=(i!=1))
-#                lines(mapcors)
+                my.map.plot(X[Xorder],Y[Yorder],z=var[Xorder,Yorder,i], breaks = breaks, col=my.tim.colors, smallplot=smallplot, main=time[i], bigplot=plt.list[[i]])
+                lines(mapcors)
             }
-            
-            
         } else {
             image.plot()
         }
+
     }
 }
 
