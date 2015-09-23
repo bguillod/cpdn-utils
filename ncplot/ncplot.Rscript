@@ -72,6 +72,11 @@ ncplot <- function(file, variable, with.borders, file.out, plottype="spacetime")
         file <- file2
         variable <- variable2
 
+        setwd("/ouce-home/staff/cenv0433/data/MaRIUS/WAH-runs/test_data/20150907/region_independent_test_on_Beta/temp")
+        file <- "f220ma.pcf3jan.nc"
+        variable <- "field1"
+        with.border <- TRUE
+        
     }
 
     source(file.path(colFuncs.path, "my.tim.colors.R"))
@@ -127,7 +132,13 @@ ncplot <- function(file, variable, with.borders, file.out, plottype="spacetime")
 #        lon.name <- 
     } else {
         grid.type <- "lonlat"
-
+        source(file.path(r.infos.path, "degree.adjustRange.R"))
+        X.new <- degree.adjustRange(X)
+        x.order <- order(X.new)
+        var <- var[x.order,,]
+        X <- X.new[x.order]
+        lon <- X
+        lat <- Y
     }
 
 #    if (names(dims)[(dims=="X") | (dims=="Y")] == c("grid_longitude", "grid_latitude"))
@@ -180,7 +191,7 @@ ncplot <- function(file, variable, with.borders, file.out, plottype="spacetime")
             if (all(findInterval(lon, c(-180.00000001,180.00000001)) == 1)) {
                 map.borders <- map2SpatialLines(map('world', plot=F))
             } else if (all(findInterval(lon, c(-0.0000001,360.00000001)) == 1)) {
-                map.borders <- map2SpatialLines(map('world2', plot=F))
+                map.borders <- map2SpatialLines(map('world2', plot=F, xlim=range(lon), ylim=range(lat)))
             } else {
                 warning("** unexpected longitude value, not borders can be drawn **")
             }
@@ -192,7 +203,7 @@ ncplot <- function(file, variable, with.borders, file.out, plottype="spacetime")
  
         } else {
             x11()
-            stplot(Z.st,col.regions=tim.colors())
+            stplot(Z.st,col.regions=tim.colors(), main=varname)
             
         }
     } else if (plottype == "image") {
