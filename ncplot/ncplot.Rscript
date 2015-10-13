@@ -35,7 +35,7 @@ option_list <- list(
     make_option(c("-p", "--plottype"), type="character", action="store", default=NULL,
                 help="Name of the plot type: 'image' or 'spacetime'",
                 metavar="image"),
-    make_option(c("-b", "--borders"), type="logical", action="store_true", default=FALSE,
+    make_option(c("-b", "--borders"), type="logical", action="store_true", default=TRUE,
                 help="Add country borders to map?"),
     make_option(c("-o", "--output"), type="character", action="store", 
                 help="Output file for figure [optional]",
@@ -45,7 +45,7 @@ option_list <- list(
 ## otherwise if options not found on command line then set defaults,
 opt <- parse_args(OptionParser(option_list=option_list))
 ## do required arguments exists?
-required.args <- c("input", "variable")
+required.args <- c("input")
 missing.args <- is.na(match(required.args, names(opt))) | sapply(opt[required.args], is.null)
 if (any(missing.args)) {
     print(required.args[missing.args])
@@ -57,7 +57,7 @@ func.args <- func.args[!sapply(func.args, is.null)]
 
 
 
-ncplot <- function(file, variable, with.borders, file.out, plottype="spacetime") {
+ncplot <- function(file, variable, with.borders, file.out, plottype="image") {
 
     if (FALSE) {
 
@@ -75,7 +75,12 @@ ncplot <- function(file, variable, with.borders, file.out, plottype="spacetime")
         setwd("/ouce-home/staff/cenv0433/data/MaRIUS/WAH-runs/test_data/20150907/region_independent_test_on_Beta/temp")
         file <- "f220ma.pcf3jan.nc"
         variable <- "field1"
-        with.border <- TRUE
+
+
+        file <- "~/data/batch48/ncdf/2005/hadam3p_eu_ipqy_2005_1_008478559_1/ga.pe/field16/ipqyga.pek5dec_field16.nc"
+        variable <- "field16"
+        with.borders <- TRUE
+        plottype <- "image"
         
     }
 
@@ -85,9 +90,21 @@ ncplot <- function(file, variable, with.borders, file.out, plottype="spacetime")
 
     ## load data
     nc <- nc_open(file)
-    var <- ncvar_get(nc, variable)
+    if (missing(variable)) {
+        ncvars <- nc.get.variable.list(nc, min.dims=3)
+        if (length(ncvars) == 1) {
+            variable <- ncvars
+        } else {
+            ncvars <- ncvars[substr(ncvars, 1,5) == "field"]
+            if (length(ncvars) != 1) stop("** ERROR ** variable not provided and I cannot choose *****")
+            variable <- ncvars
+        }
+        rm(ncvars)
+    }
+    var <- ncvar_get(nc, variable, collapse_degen=TRUE)
     dims <- nc.get.dim.axes(nc, variable)
     varname <- ncatt_get(nc, variable, "long_name")$value
+    ndims <- length(dim(var))
 
     ## get time dimensions
     t.orig <- strsplit(ncatt_get(nc, names(dims)[which(dims == "T")], "units")$value, " since ")[[1]]
@@ -107,9 +124,14 @@ ncplot <- function(file, variable, with.borders, file.out, plottype="spacetime")
     ## get spatial coordinates
     X <- ncvar_get(nc, names(dims)[which(dims == "X")])
     Y <- ncvar_get(nc, names(dims)[which(dims == "Y")])
+    if (all(diff(Y) <= 0)) {
+        Y <- rev(Y)
+        if (ndims == 3) var <- var[,length(Y):1,] else var <- var[,length(Y):1]
+    }
     Xname <- ncatt_get(nc, names(dims)[which(dims == "X")], "standard_name")$value
     Yname <- ncatt_get(nc, names(dims)[which(dims == "Y")], "standard_name")$value
     grid.mapping <- ncatt_get(nc, variable, "grid_mapping")
+    pol <- ncatt_get(nc, variable, "north_pole")
     if (grid.mapping$hasatt) {
         grid.type <- ncatt_get(nc, grid.mapping$value, "grid_mapping_name")
         if (grid.type$hasatt & grid.type$value == "rotated_latitude_longitude") {
@@ -124,12 +146,21 @@ ncplot <- function(file, variable, with.borders, file.out, plottype="spacetime")
             stop("** ERROR ** unexpected value to 'grid_mapping_name' attribute *****")
         }
         grid.infos <- strsplit(grid.lonlat$value, " ")[[1]]
-        lon.name <- grid.infos[which(substr(grid.infos, 1,3) == "lon")]
-        lat.name <- grid.infos[which(substr(grid.infos, 1,3) == "lat")]
+        ## lon.name <- grid.infos[which(substr(grid.infos, 1,3) == "lon")]
+        ## lat.name <- grid.infos[which(substr(grid.infos, 1,3) == "lat")]
+        lon.name <- grid.infos[1]
+        lat.name <- grid.infos[2]
         lon <- ncvar_get(nc, lon.name)
         lat <- ncvar_get(nc, lat.name)
 #        test <- mapproject(X, rep(Y[1], length(X)), orientation=c(plat, plon))
 #        lon.name <- 
+    } else if (pol$hasatt) {
+            grid.type <- "rotpol"
+            vn.temp <- pol$value
+            plon <- ncatt_get(nc, vn.temp, "grid_north_pole_longitude")
+            plat <- ncatt_get(nc, vn.temp, "grid_north_pole_latitude")
+            if (plon$hasatt) plon <- plon$value else grid.type <- "lonlat"
+            if (plat$hasatt) plat <- plat$value else grid.type <- "lonlat"
     } else {
         grid.type <- "lonlat"
         source(file.path(r.infos.path, "degree.adjustRange.R"))
@@ -146,6 +177,7 @@ ncplot <- function(file, variable, with.borders, file.out, plottype="spacetime")
 
     ## X <- seq(0,360, length.out=dim(var)[1])
     ## Y <- seq(-80,80, length.out=dim(var)[2])
+
 
     if (plottype == "spacetime") {
     
@@ -206,104 +238,185 @@ ncplot <- function(file, variable, with.borders, file.out, plottype="spacetime")
             stplot(Z.st,col.regions=tim.colors(), main=varname)
             
         }
+
     } else if (plottype == "image") {
         
-        if (with.borders) {
-            ## countries.m = map('world', plot=FALSE, fill=TRUE)
-            ## IDs <- sapply(strsplit(countries.m$names, ":"), function(x) x[1])
-            ## countries <- map2SpatialPolygons(countries.m, IDs=IDs)
-                                        #       which.neg <- which(mapcors[,1]<0)
-                                        #        mapcors[which.neg,1] <- mapcors[which.neg,1]+360
-                                        #        mapcors[mapcors[,1]<0,1] <- mapcors[mapcors[,1]<0,1]+360
-            if (grid.type == "rotpol") {
-                data(world.nations)
-                mapcors <- matrix(c(world.nations$border$lon,
-                                    world.nations$border$lat), ncol=2)
-                ## first find the range in lonlat coords
-                grid.lonlat <- expand.grid(list(rlon=X,rlat=Y))
-                grid.lonlat <- rotpol2lonlat(grid.lonlat$rlon, grid.lonlat$rlat, plon=plon, plat=plat)
-                in.range <- apply(grid.lonlat, 2, range, na.rm=TRUE)
-                in.range[,1] <- in.range[,1]+c(-1,1)*unique(abs(diff(X)))
-                in.range[,2] <- in.range[,2]+c(-1,1)*unique(abs(diff(Y)))
-                invals <- apply(mapcors, 1, function(v) (findInterval(v[1], in.range[,1]) == 1) & (findInterval(v[2], in.range[,2]) == 1))
-                mapcors[!invals, ] <- NA
-                ## Xtemp <- X
-                ## Xtemp[Xtemp>180] <- Xtemp[Xtemp>180]-360
-                ## xlim <- range(Xtemp)
-                ## ylim <- range(Y)
-                navals <- apply(is.na(mapcors), 1, any)
-                mapcors.rot <- lonlat2rotpol(lon = world.nations$border[!navals,"lon"],
-                                             lat = world.nations$border[!navals,"lat"],
-                                             plon = plon, plat=plat)
-                mapcors[!navals,] <- mapcors.rot
-                ## invals <- apply(mapcors, 1, function(v) (findInterval(v[1], xlim) == 1) & (findInterval(v[2], ylim) == 1))
-                ## mapcors[!invals, ] <- NA
-                mapcors.neg <- which(mapcors[,1]<0)
-                mapcors[mapcors.neg, 1] <- mapcors[mapcors.neg, 1]+360
-            } else if (grid.type != "lonlat") {
-                if (all(findInterval(lon, c(-180.00000001,180.00000001)) == 1)) {
-                    map.borders <- map('world', plot=F)
-                } else if (all(findInterval(lon, c(-0.0000001,360.00000001)) == 1)) {
-                    map.borders <- map('world2', plot=F)
-                } else {
-                    warning("** unexpected longitude value, not borders can be drawn **")
-                }
-                mapcors <- map.borders
-                ## mapcors <- mapproject(list(x=world.nations$border[,"lon"],
-                ##                            y=world.nations$border[,"lat"]))
+        source(file.path(r.generics.path, "4_mapFuncs/my.image.plot.R"))
+        xlim <- range(X)
+        ylim <- range(Y)
+        if (grid.type == "lonlat") {
+            lonlim <- xlim
+            latlim <- ylim
+            panel.map <- findInterval(xlim+c(1,-1), seq(-180, 360, by=180))
+            if (diff(panel.map) > 1) stop("** ERROR unexpected longitude lonlat data *****")
+            if (all(panel.map) == c(1,2)) {
+                map.name <- "world"
+            } else if (all(panel.map == c(2,3))) {
+                map.name <- "world2"
+            } else if (length(unique(panel.map)) == 1) {
+                map.name <- "world"
             } else {
-                stop("** ERROR ** unexpected value for grid.type *****")
+                map.name <- "world"
+                warning("** map.name cannot be determined (grid.type='lonlat')**")
             }
+        } else if (grid.type == "rotpol") {
+            lims <- rotpol2lonlat(rep(xlim, each=2), rep(ylim, times=2), plon=plon, plat=plat)
+            lonlim <- range(lims[,1])
+            latlim <- range(lims[,2])
+            panel.map <- findInterval(plon-180+xlim, seq(-180, 360, by=180))
+            if (diff(panel.map) > 1) stop("** ERROR unexpected longitude lonlat data *****")
+            if (all(panel.map == c(1,2))) {
+                map.name <- "world"
+            } else if (all(panel.map == c(2,3))) {
+                map.name <- "world2"
+            } else if (length(unique(panel.map)) == 1) {
+                map.name <- "world"
+            } else {
+                map.name <- "world"
+                warning("** map.name cannot be determined (grid.type='rotpol')**")
+            }
+        }
+
+        if (with.borders) {
+            map.data <- map(plot=F, xlim=lonlim, ylim=latlim, database=map.name)
+            if (grid.type=="rotpol") {
+                map.data.na <- is.na(map.data$x)
+                map.data.temp <- lonlat2rotpol(map.data$x[!map.data.na], map.data$y[!map.data.na], plon, plat)
+                map.data.rot <- map.data
+                map.data.rot$x[!map.data.na] <- map.data.temp[,1]
+                map.data.rot$y[!map.data.na] <- map.data.temp[,2]
+                map.data <- map.data.rot
+            }
+        }
+
+        nplots <- dim(var)[3]
+        if (nplots == 1 | is.na(nplots)) {
+            nrows <- ncols <- 1
+            mats <- 1:2
+        } else if (nplots == 30) {
+            nrows <- 5
+            ncols <- 6
+            mats <- c(1:30, rep(31, ncols))
+        } else if (nplots == 28) {
+            nrows <- 5
+            ncols <- 6
+            mats <- c(1:28, nplots+2, nplots+2, rep(nplots+1, ncols))
+        } else {
+            ncols <- ceiling(sqrt(nplots))
+            nrows <- ceiling(nplots/ncols)
+                miss.pan <- nrows*ncols-nplots
+            mats <- c(1:nplots, rep(nplots+2, miss.pan), rep(nplots+1, ncols))
+        }
+        layout.args <- list(mat=matrix(mats, ncol=ncols, nrow=nrows+1, byrow=TRUE), heights=c(rep(3, nrows), 1))
+        x11()
+        do.call(layout, layout.args)
+        par(mar=c(0.5,0.5,2,0.5))
+        brk <- pretty(range(var, na.rm=ifelse(any(is.na(var)), T, F)), n=12)#imagePlotInfo(z=var, nlevel=64)$breaks
+        source(file.path(r.infos.path, "degree.adjustRange.R"))
+        Y.plot <- degree.adjustRange(Y)
+        X.plot <- degree.adjustRange(X)
+        if (is.na(nplots)) vplot <- array(dim=c(dim(var), 1), data=var) else vplot <- var
+        str(vplot)
+        nplots <- ifelse(is.na(nplots), 1, nplots)
+        for (i in 1:nplots) {
+            my.image.plot(x=X.plot,y=Y.plot,z=vplot[,,i], breaks=brk, use.plt=FALSE, add.legend=FALSE,
+                          main=as.character(time[i]))
+            if (with.borders) lines(map.data)
+        }
+        my.image.plot(x=X.plot,y=Y.plot,z=vplot[,,i], breaks=brk, use.plt=FALSE, legend.only=TRUE,
+                      smallplot=c(0.1,0.9,0.5,0.7), axis.args=list(mgp=c(3,0.5,0)),
+                          legend.args=list(text=varname, line=0.5), horizontal=TRUE)
+        ## if (with.borders) {
+            ## if (grid.type == "rotpol") {
+            ##     data(world.nations)
+            ##     mapcors <- matrix(c(world.nations$border$lon,
+            ##                         world.nations$border$lat), ncol=2)
+            ##     ## first find the range in lonlat coords
+            ##     grid.lonlat <- expand.grid(list(rlon=X,rlat=Y))
+            ##     grid.lonlat <- rotpol2lonlat(grid.lonlat$rlon, grid.lonlat$rlat, plon=plon, plat=plat)
+            ##     in.range <- apply(grid.lonlat, 2, range, na.rm=TRUE)
+            ##     in.range[,1] <- in.range[,1]+c(-1,1)*unique(abs(diff(X)))
+            ##     in.range[,2] <- in.range[,2]+c(-1,1)*unique(abs(diff(Y)))
+            ##     invals <- apply(mapcors, 1, function(v) (findInterval(v[1], in.range[,1]) == 1) & (findInterval(v[2], in.range[,2]) == 1))
+            ##     mapcors[!invals, ] <- NA
+            ##     ## Xtemp <- X
+            ##     ## Xtemp[Xtemp>180] <- Xtemp[Xtemp>180]-360
+            ##     ## xlim <- range(Xtemp)
+            ##     ## ylim <- range(Y)
+            ##     navals <- apply(is.na(mapcors), 1, any)
+            ##     mapcors.rot <- lonlat2rotpol(lon = world.nations$border[!navals,"lon"],
+            ##                                  lat = world.nations$border[!navals,"lat"],
+            ##                                  plon = plon, plat=plat)
+            ##     mapcors[!navals,] <- mapcors.rot
+            ##     ## invals <- apply(mapcors, 1, function(v) (findInterval(v[1], xlim) == 1) & (findInterval(v[2], ylim) == 1))
+            ##     ## mapcors[!invals, ] <- NA
+            ##     mapcors.neg <- which(mapcors[,1]<0)
+            ##     mapcors[mapcors.neg, 1] <- mapcors[mapcors.neg, 1]+360
+            ## } else if (grid.type != "lonlat") {
+            ##     if (all(findInterval(lon, c(-180.00000001,180.00000001)) == 1)) {
+            ##         map.borders <- map('world', plot=F)
+            ##     } else if (all(findInterval(lon, c(-0.0000001,360.00000001)) == 1)) {
+            ##         map.borders <- map('world2', plot=F)
+            ##     } else {
+            ##         warning("** unexpected longitude value, not borders can be drawn **")
+            ##     }
+            ##     mapcors <- map.borders
+            ##     ## mapcors <- mapproject(list(x=world.nations$border[,"lon"],
+            ##     ##                            y=world.nations$border[,"lat"]))
+            ## } else {
+            ##     stop("** ERROR ** unexpected value for grid.type *****")
+            ## }
 
 
     
-            ## make plot
-            source(file.path(mapFuncs.path, "my.map.plot.R"))
-            source(file.path(plotFuncs.path, "plt_mk/define.plt.R"))
-            Xorder <- order(X)
-            Yorder <- order(Y)
-            Z <- var[Xorder, Yorder,]
+        ##     ## make plot
+        ##     source(file.path(mapFuncs.path, "my.map.plot.R"))
+        ##     source(file.path(plotFuncs.path, "plt_mk/define.plt.R"))
+        ##     Xorder <- order(X)
+        ##     Yorder <- order(Y)
+        ##     Z <- var[Xorder, Yorder,]
             
-            switch(as.character(length(time)),
-                   "31"= {
-                       mfrows <- c(6,6)
-                       height <- 9
-                       width <- 12
-                       mar <- c(0.1,0.1,0.1,3)
-                      },
-                   "1"={
-                       mfrows <- c(1,1)
-                       height <- width <- 7
-                       mar <- c(0.1,0.1,0.1,3)
-                      },
-                   "12"={
-                       mfrows <- c(3,4)
-                       height <- width <- 7
-                       mar <- c(0.1,0.1,0.1,3)
-                      },
-                   "3"={
-                       mfrows <- c(1,3)
-                       height <- width <- 7
-                       mar <- c(0.1,0.1,0.1,3)
-                      },
-                   {
-                       mfrows <- rep(ceiling(sqrt(length(time))), 2)
-                       height <- width <- 7
-                       mar <- c(0.1,0.1,0.1,3)
-                      })
-            breaks <- pretty(var, n=10)
-            x11(width=width, height=height)
-            par(mar=c(0.1,0.1,0.1,2))
-            plt.list <- define.plt(mfrows[1], mfrows[2])        
-            for (i in 1:length(time)) {
-                smallplot <- if (i==length(time)) c(0.85,0.88,0.1,0.8) else rep(NA,4)
-                my.map.plot(X[Xorder],Y[Yorder],z=var[Xorder,Yorder,i], breaks = breaks, col=my.tim.colors, smallplot=smallplot, main=time[i], bigplot=plt.list[[i]])
-                lines(mapcors)
-            }
-        } else {
-            image.plot()
-        }
+        ##     switch(as.character(length(time)),
+        ##            "31"= {
+        ##                mfrows <- c(6,6)
+        ##                height <- 9
+        ##                width <- 12
+        ##                mar <- c(0.1,0.1,0.1,3)
+        ##               },
+        ##            "1"={
+        ##                mfrows <- c(1,1)
+        ##                height <- width <- 7
+        ##                mar <- c(0.1,0.1,0.1,3)
+        ##               },
+        ##            "12"={
+        ##                mfrows <- c(3,4)
+        ##                height <- width <- 7
+        ##                mar <- c(0.1,0.1,0.1,3)
+        ##               },
+        ##            "3"={
+        ##                mfrows <- c(1,3)
+        ##                height <- width <- 7
+        ##                mar <- c(0.1,0.1,0.1,3)
+        ##               },
+        ##            {
+        ##                mfrows <- rep(ceiling(sqrt(length(time))), 2)
+        ##                height <- width <- 7
+        ##                mar <- c(0.1,0.1,0.1,3)
+        ##               })
+        ##     breaks <- pretty(var, n=10)
+        ##     x11(width=width, height=height)
+        ##     par(mar=c(0.1,0.1,0.1,2))
+        ##     plt.list <- define.plt(mfrows[1], mfrows[2])        
+        ##     for (i in 1:length(time)) {
+        ##         smallplot <- if (i==length(time)) c(0.85,0.88,0.1,0.8) else rep(NA,4)
+        ##         my.map.plot(X[Xorder],Y[Yorder],z=var[Xorder,Yorder,i], breaks = breaks, col=my.tim.colors, smallplot=smallplot, main=time[i], bigplot=plt.list[[i]])
+        ##         lines(mapcors)
+        ##     }
+        ## } else {
+        ##     image.plot()
+        ## }
 
+            ## }
     }
 }
 
