@@ -9,7 +9,6 @@
 suppressPackageStartupMessages(library("optparse"))
 suppressPackageStartupMessages(library("ncdf4"))
 suppressPackageStartupMessages(library("ncdf4.helpers"))
-suppressPackageStartupMessages(library("spacetime"))
 suppressPackageStartupMessages(library("fields"))
 suppressPackageStartupMessages(library("maps"))
 suppressPackageStartupMessages(library("maptools"))
@@ -81,7 +80,9 @@ ncplot <- function(file, variable, with.borders, file.out, plottype="image") {
         variable <- "field16"
         with.borders <- TRUE
         plottype <- "image"
-        
+
+        file <- "/ouce-home/staff/cenv0433/data/USdrought/1985-2013/1991/hadam3p_pnw_a0za_1991_1_009881878_0/a0zaga.pej1dec.nc"
+        variable <- "field16"
     }
 
     source(file.path(colFuncs.path, "my.tim.colors.R"))
@@ -181,6 +182,7 @@ ncplot <- function(file, variable, with.borders, file.out, plottype="image") {
 
     if (plottype == "spacetime") {
     
+        suppressPackageStartupMessages(library("spacetime"))
         a2st <- function(arr,
                          lon=attr(arr, "lon"),
                          lat=attr(arr, "lat"),
@@ -260,9 +262,10 @@ ncplot <- function(file, variable, with.borders, file.out, plottype="image") {
                 warning("** map.name cannot be determined (grid.type='lonlat')**")
             }
         } else if (grid.type == "rotpol") {
-            lims <- rotpol2lonlat(rep(xlim, each=2), rep(ylim, times=2), plon=plon, plat=plat)
-            lonlim <- range(lims[,1])
-            latlim <- range(lims[,2])
+            source(file.path(mapFuncs.path, "my.rotpol2lonlat.R"))
+            lims <- my.rotpol2lonlat(rep(xlim, each=2), rep(ylim, times=2), plon=plon, plat=plat)
+            lonlim <- range(lims$lon)
+            latlim <- range(lims$lat)
             panel.map <- findInterval(plon-180+xlim, seq(-180, 360, by=180))
             if (diff(panel.map) > 1) stop("** ERROR unexpected longitude lonlat data *****")
             if (all(panel.map == c(1,2))) {
@@ -316,7 +319,6 @@ ncplot <- function(file, variable, with.borders, file.out, plottype="image") {
         Y.plot <- degree.adjustRange(Y)
         X.plot <- degree.adjustRange(X)
         if (is.na(nplots)) vplot <- array(dim=c(dim(var), 1), data=var) else vplot <- var
-        str(vplot)
         nplots <- ifelse(is.na(nplots), 1, nplots)
         for (i in 1:nplots) {
             my.image.plot(x=X.plot,y=Y.plot,z=vplot[,,i], breaks=brk, use.plt=FALSE, add.legend=FALSE,
