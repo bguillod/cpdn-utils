@@ -12,7 +12,7 @@ suppressPackageStartupMessages(library("ncdf4.helpers"))
 suppressPackageStartupMessages(library("fields"))
 suppressPackageStartupMessages(library("maps"))
 suppressPackageStartupMessages(library("maptools"))
-suppressPackageStartupMessages(library("plotmap"))
+#suppressPackageStartupMessages(library("plotmap"))
 suppressPackageStartupMessages(library("PCICt"))
 
 
